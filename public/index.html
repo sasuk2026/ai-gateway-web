@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Gateway · 免费模型调用台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f1115; color: #e6e6e6; }
+  .hidden { display: none !important; }
+  .center { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .card { background: #1a1d24; padding: 28px; border-radius: 14px; width: 340px; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+  input, select, button, textarea { font-size: 14px; border-radius: 8px; border: 1px solid #2c313c; background: #11141a; color: #e6e6e6; padding: 9px 11px; width: 100%; }
+  button { cursor: pointer; background: #3b82f6; border: none; color: #fff; font-weight: 600; }
+  button:hover { filter: brightness(1.08); }
+  .lab { font-size: 12px; color: #8b93a3; margin: 10px 0 4px; }
+  #app { display: grid; grid-template-columns: 280px 1fr; height: 100vh; }
+  .side { background: #15181f; padding: 16px; overflow-y: auto; border-right: 1px solid #232830; }
+  .main { display: flex; flex-direction: column; }
+  #log { flex: 1; overflow-y: auto; padding: 18px; }
+  .msg { margin-bottom: 14px; }
+  .msg .role { font-size: 11px; color: #6b7280; margin-bottom: 3px; }
+  .msg .bubble { background: #1c2029; padding: 11px 13px; border-radius: 10px; white-space: pre-wrap; line-height: 1.55; }
+  .msg.user .bubble { background: #1e3a5f; }
+  .bar { padding: 12px 16px; border-top: 1px solid #232830; display: flex; gap: 8px; }
+  .bar textarea { height: 44px; resize: none; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 20px; background: #232830; color: #9aa4b2; margin-right: 6px; }
+  .ok { color: #34d399; } .bad { color: #f87171; }
+  .small { font-size: 11px; color: #6b7280; }
+  #modelList { max-height: 220px; overflow-y: auto; font-size: 12px; }
+  #modelList div { padding: 3px 4px; border-bottom: 1px solid #20242c; }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login" class="center">
+  <div class="card">
+    <h2 style="margin:0 0 4px">🔐 AI Gateway</h2>
+    <p class="small" style="margin-top:0">输入访问密码进入调用台</p>
+    <div class="lab">密码</div>
+    <input id="pw" type="password" placeholder="默认 sk-834298">
+    <button style="margin-top:14px" onclick="doLogin()">进入</button>
+    <p id="loginErr" class="bad small" style="min-height:14px"></p>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app" class="hidden">
+  <div class="side">
+    <h3 style="margin:4px 0 10px">⚙️ 网关设置</h3>
+    <div class="lab">Base URL（OpenAI 兼容）</div>
+    <input id="baseUrl" placeholder="https://openrouter.ai/api/v1">
+    <div class="lab">API Key（可空，取决于网关）</div>
+    <input id="apiKey" placeholder="留空或填你的 key">
+    <button style="margin-top:12px" onclick="saveConfig()">保存配置</button>
+
+    <hr style="border-color:#232830;margin:18px 0">
+    <div class="lab">模型（实时刷新可用列表）</div>
+    <button style="background:#374151;margin-bottom:8px" onclick="refreshModels()">↻ 刷新可用模型</button>
+    <div id="modelStatus" class="small"></div>
+    <div id="modelList"></div>
+    <div class="lab" style="margin-top:10px">当前选择</div>
+    <input id="model" placeholder="如 openrouter/free 或 gh/claude-sonnet-4.6">
+    <button style="margin-top:14px;background:#374151" onclick="logout()">退出登录</button>
+  </div>
+
+  <div class="main">
+    <div id="log"></div>
+    <div class="bar">
+      <textarea id="input" placeholder="输入消息，Enter 发送 / Shift+Enter 换行"></textarea>
+      <button style="width:90px" onclick="send()">发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let TOKEN = '';
+const logEl = document.getElementById('log');
+
+async function doLogin() {
+  const pw = document.getElementById('pw').value;
+  const r = await fetch('/api/login', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ password: pw })
+  });
+  if (r.ok) {
+    const d = await r.json(); TOKEN = d.token;
+    document.getElementById('login').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    loadConfig();
+  } else {
+    document.getElementById('loginErr').textContent = '密码错误';
+  }
+}
+
+async function loadConfig() {
+  const r = await fetch('/api/config', { headers: { 'x-auth-token': TOKEN } });
+  const c = await r.json();
+  document.getElementById('baseUrl').value = c.baseUrl || '';
+  document.getElementById('apiKey').value = c.apiKeySet ? '***set***' : '';
+}
+
+async function saveConfig() {
+  const baseUrl = document.getElementById('baseUrl').value.trim();
+  const apiKey = document.getElementById('apiKey').value.trim();
+  await fetch('/api/config', {
+    method: 'POST', headers: {'Content-Type':'application/json','x-auth-token':TOKEN},
+    body: JSON.stringify({ baseUrl, apiKey })
+  });
+  alert('配置已保存');
+  refreshModels();
+}
+
+async function refreshModels() {
+  const st = document.getElementById('modelStatus');
+  st.textContent = '刷新中…';
+  const r = await fetch('/api/models', { headers: { 'x-auth-token': TOKEN } });
+  const d = await r.json();
+  if (d.error) { st.innerHTML = '<span class="bad">刷新失败: '+d.error+'</span>'; return; }
+  const list = document.getElementById('modelList');
+  list.innerHTML = '';
+  d.models.forEach(m => {
+    const el = document.createElement('div');
+    el.textContent = m;
+    el.style.cursor = 'pointer';
+    el.onclick = () => document.getElementById('model').value = m;
+    list.appendChild(el);
+  });
+  st.innerHTML = '<span class="ok">✓ 可用模型 '+d.count+' 个</span>';
+}
+
+function addMsg(role, text) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  el.innerHTML = '<div class="role">'+(role==='user'?'你':'AI')+'</div><div class="bubble"></div>';
+  el.querySelector('.bubble').textContent = text;
+  logEl.appendChild(el);
+  logEl.scrollTop = logEl.scrollHeight;
+  return el.querySelector('.bubble');
+}
+
+async function send() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  const model = document.getElementById('model').value.trim() || 'openrouter/free';
+  addMsg('user', text);
+
+  const bubble = addMsg('assistant', '…');
+  const r = await fetch('/api/chat', {
+    method: 'POST', headers: {'Content-Type':'application/json','x-auth-token':TOKEN},
+    body: JSON.stringify({
+      model, stream: true,
+      messages: [{ role: 'user', content: text }]
+    })
+  });
+
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let acc = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = dec.decode(value, { stream: true });
+    for (const line of chunk.split('\n')) {
+      const t = line.trim();
+      if (!t.startsWith('data:')) continue;
+      const payload = t.slice(5).trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const j = JSON.parse(payload);
+        const delta = j.choices?.[0]?.delta?.content || '';
+        acc += delta;
+        bubble.textContent = acc;
+        logEl.scrollTop = logEl.scrollHeight;
+      } catch {}
+    }
+  }
+  if (!acc) bubble.textContent = '(空响应，检查模型/密钥)';
+}
+
+function logout() { TOKEN = ''; location.reload(); }
+
+document.getElementById('input')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+</script>
+</body>
+</html>

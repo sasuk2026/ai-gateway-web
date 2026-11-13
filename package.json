@@ -1,0 +1,12 @@
+{
+  "name": "ai-gateway-web",
+  "version": "1.0.0",
+  "description": "Password-protected web UI that proxies to any OpenAI-compatible free-model gateway (OmniRoute / OpenRouter / 9router / freellmapi).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.22.3"
+  }
+}
